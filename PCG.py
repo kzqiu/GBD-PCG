@@ -94,12 +94,57 @@ class PCG:
 		x = np.matmul(x.T,Pinv).T
 		return x
 
+	def weighted_randomized_kaczmarz(self, A, b, Pinv, x0=None, p=2, max_iter=10000):
+		A = np.dot(A, Pinv)
+		m, n = A.shape
+		epsilon = 1e-5
+    
+	    # Ensure that A has full rank
+		if np.linalg.matrix_rank(A) < n:
+			raise ValueError("Matrix A does not have full rank.")
+    
+	    # Initial solution
+		if x0 is None:
+			x0 = np.zeros((n, 1))
+		xk = x0
+
+	    # Pre-computation
+		r0 = A @ xk - b
+		Q = A @ A.T
+
+	    # Iteration
+		for _ in range(max_iter):
+			Ax_minus_b_norm = np.linalg.norm(A @ xk - b)**p
+        
+	        # Compute probabilities for row selection
+			prob = np.abs(A @ xk - b)**p / (Ax_minus_b_norm + epsilon)
+			prob /= np.sum(prob)
+			prob = np.squeeze(np.nan_to_num(prob))
+
+			i = np.random.choice(m, p=prob)
+        
+	        # Compute lambda for the selected row
+			lambda_ = ((b[i] - np.dot(A[i], xk)) / Q[i,i])[0]
+        
+	        # Update xk and rk
+			xk = xk + lambda_ * A[i].reshape((m, 1))
+			r0 = r0 + lambda_ * Q[:, i].reshape((m, 1))
+        
+	        # Convergence check (optional, depending on specific use-case)
+			if np.linalg.norm(A @ xk - b) < 1e-6:
+				break
+    
+		xk = np.dot(xk.T, Pinv).T
+	
+		return xk
+
 	def pcg(self, A, b, Pinv, guess, options = {}):
 		self.set_default_options(options)
 		trace = []
 
 		if options['use_RK']:
-			return self.prk(A, b, Pinv, guess, options)
+			# return self.prk(A, b, Pinv, guess, options)
+			return self.weighted_randomized_kaczmarz(A, b, Pinv)
 		if options['only_precon']:
 			return np.matmul(Pinv,b)
 
