@@ -94,14 +94,16 @@ class PCG:
 		x = np.matmul(x.T,Pinv).T
 		return x
 
-	def weighted_randomized_kaczmarz(self, A, b, Pinv, x0=None, p=2, max_iter=10000):
+	def weighted_randomized_kaczmarz(self, A, b, Pinv, x0=None, p=10, max_iter=1000):
+		# apply preconditioner
 		A = np.dot(A, Pinv)
 		m, n = A.shape
 		epsilon = 1e-5
     
 	    # Ensure that A has full rank
-		if np.linalg.matrix_rank(A) < n:
-			raise ValueError("Matrix A does not have full rank.")
+		# if np.linalg.matrix_rank(A) < n:
+		# 	print(A.shape)
+		# 	raise ValueError("Matrix A does not have full rank.")
     
 	    # Initial solution
 		if x0 is None:
@@ -109,12 +111,12 @@ class PCG:
 		xk = x0
 
 	    # Pre-computation
-		r0 = A @ xk - b
+		r0 = A @ xk
 		Q = A @ A.T
 
 	    # Iteration
 		for _ in range(max_iter):
-			Ax_minus_b_norm = np.linalg.norm(A @ xk - b)**p
+			Ax_minus_b_norm = np.linalg.norm(np.squeeze(A @ xk - b), ord=p)**p
         
 	        # Compute probabilities for row selection
 			prob = np.abs(A @ xk - b)**p / (Ax_minus_b_norm + epsilon)
@@ -131,12 +133,91 @@ class PCG:
 			r0 = r0 + lambda_ * Q[:, i].reshape((m, 1))
         
 	        # Convergence check (optional, depending on specific use-case)
-			if np.linalg.norm(A @ xk - b) < 1e-6:
+			if np.linalg.norm(A @ xk - b) < 1e-3:
 				break
     
 		xk = np.dot(xk.T, Pinv).T
 	
 		return xk
+
+	
+	def mgrk(
+		self,
+		A: np.ndarray,
+		b: np.ndarray,
+		pinv: np.ndarray,
+		alpha: float,
+		beta: float,
+		theta: float,
+		x0=None,
+		max_iter=10000,
+		tol=1e-6,
+	) -> np.ndarray:
+		"""
+		Solves the Ax = b system using the mGRK method from https://arxiv.org/pdf/2307.01988.pdf
+
+		Parameters:
+		- A: numpy array, the coefficient matrix A in Ax = b.
+		- b: numpy array, the right-hand side vector in Ax = b.
+		- alpha: float, the step size parameter.
+		- beta: float, the momentum parameter.
+		- theta: float, the parameter to adjust the greedy probability criterion.
+		- x0: numpy array, initial guess for the solution.
+		- max_iter: int, maximum number of iterations.
+		- tol: float, tolerance for the stopping criterion.
+
+		Returns:
+		- x: numpy array, the approximate solution to Ax = b.
+		"""
+		A = np.dot(A, pinv)
+
+		if x0 is None:
+			x0 = np.zeros(A.shape[1])
+
+		x = x0.copy()
+		x_prev = x0.copy()
+		b = b.T.squeeze()
+
+		for _ in range(max_iter):
+	        # Compute the residuals and determine the set Sk
+			residuals = np.abs(np.dot(A, x) - b)
+
+			if np.sum(residuals ** 2) < tol:
+				break
+			
+	        # Simplified computation for gamma_k
+			gamma_k = np.linalg.norm(A, ord="fro") ** 2
+			criterion = (
+				theta * np.max(residuals) ** 2
+				+ (1 - theta) * np.linalg.norm(residuals) ** 2 / gamma_k
+			)
+			Sk = np.where(residuals**2 >= criterion)[0]
+
+			if len(Sk) == 0:
+				break  # All residuals are below the threshold
+
+	        # Select ik from Sk based on some probability criterion (uniformly for simplicity)
+			ik = np.random.choice(Sk)
+
+	        # Update x using the mGRK formula
+			a_ik = A[ik, :]
+			numerator = np.dot(a_ik, x) - b[ik]
+			denominator = np.linalg.norm(a_ik) ** 2
+
+			x_next = x - (alpha * (numerator / denominator) * a_ik) + (beta * (x - x_prev))
+
+			# if np.linalg.norm(x_next - x) < tol:
+				# break  # Convergence criterion met
+
+			x_prev = x
+			x = x_next
+
+		print(_)
+
+		x = x.reshape(len(x), 1)
+		x = np.dot(x.T, pinv).T
+
+		return x
 
 	def pcg(self, A, b, Pinv, guess, options = {}):
 		self.set_default_options(options)
@@ -144,9 +225,10 @@ class PCG:
 
 		if options['use_RK']:
 			# return self.prk(A, b, Pinv, guess, options)
-			return self.weighted_randomized_kaczmarz(A, b, Pinv)
-		if options['only_precon']:
-			return np.matmul(Pinv,b)
+			# return self.weighted_randomized_kaczmarz(A, b, Pinv)
+			return self.mgrk(A, b, Pinv, 0.8, 0.6, 0.5)
+		# if options['only_precon']:
+			# return np.matmul(Pinv,b)
 
 		# initialize
 		x = np.reshape(guess, (guess.shape[0],1))
@@ -186,7 +268,7 @@ class PCG:
 			p = r_tilde + beta * p
 			nu = nu_prime
 
-		print(iteration)
+		# print(iteration)
 		if options['RETURN_TRACE']:
 			trace = list(map(abs,trace))
 			return x, (trace, trace2)
